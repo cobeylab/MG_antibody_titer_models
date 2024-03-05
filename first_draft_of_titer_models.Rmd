@@ -10,6 +10,9 @@ output:
 rm(list = ls())
 library(nlme)
 library(dplyr)
+library(lattice)
+library(hexbin)
+library(ggplot2)
 ```
 
 ```{r}
@@ -123,7 +126,8 @@ censored_titer_0_strain_A = censor(titer_0_strain_A)
 titer_0_strain_B <- log(rnorm(n_individuals, mean = 16, sd = 6), base = 2) # log(16, base = 2) = 4 
 censored_titer_0_strain_B = censor(titer_0_strain_B)
 
-titer_0 <- c(censored_titer_0_strain_A, censored_titer_0_strain_B)
+titer_0 <- c(titer_0_strain_A, titer_0_strain_B)
+censored_titer_0 <- c(censored_titer_0_strain_A, censored_titer_0_strain_B)
 
 individual_effect_sd <- 0.3
 individual_effect <- rnorm(n_individuals, mean = 0, sd = individual_effect_sd)
@@ -131,7 +135,12 @@ individual_effect <- rnorm(n_individuals, mean = 0, sd = individual_effect_sd)
 percents_strain_A = c(0, 0, 0)
 percents_strain_B = c(0, 0, 0)
 
-# for (i in 1:100) {
+
+base = c(rep(0,i))
+estimates <- data.frame(intercept_A = base , intercept_B = base, slope_A = base, slope_B = base)
+censor_estimates <- data.frame(intercept_A = base , intercept_B = base, slope_A = base, slope_B = base)
+
+for (i in 1:100) {
   
   # strain A
   noise = log(rnorm(n_individuals, mean = 5, sd = 1.2), base = 2)
@@ -141,35 +150,105 @@ percents_strain_B = c(0, 0, 0)
   noise = log(rnorm(n_individuals, mean = 5, sd = 1.2), base = 2)
   titer_30_strain_B <- intercept_strain_B + slope_strain_B * censored_titer_0_strain_B + noise + individual_effect
   
+  censored_titer_30_strain_A <- censor(titer_30_strain_A)
+  censored_titer_30_strain_B <- censor(titer_30_strain_B)
+  
   titer_30 <- c(titer_30_strain_A, titer_30_strain_B)
+  censored_titer_30 <- c(censored_titer_30_strain_A, censored_titer_30_strain_B)
   
   input_data <- data.frame(IDs, strain, titer_0, titer_30)
   input_data <- arrange(input_data, IDs)
   # print(input_data)
   
-  plot(titer_0,titer_30)
+  censored_input_data <- data.frame(IDs, strain, censored_titer_0, censored_titer_30)
+  censored_input_data <- arrange(censored_input_data, IDs)
+  
+  # plot(titer_0_strain_A, titer_30_strain_A)
+  # plot(titer_0_strain_B, titer_30_strain_B)
+  # plot(censored_titer_0_strain_A, titer_30_strain_A)
+  # plot(censored_titer_0_strain_B, titer_30_strain_B)
+  # plot(censored_titer_0_strain_A, censored_titer_30_strain_A)
+  # plot(censored_titer_0_strain_B, censored_titer_30_strain_B)
   
   model <- lme(titer_30 ~  0 + strain + titer_0:strain, random = ~1|IDs, data = input_data, method = "REML")
+  censor_model <- lme(censored_titer_30 ~  0 + strain + censored_titer_0:strain, random = ~1|IDs, data = censored_input_data,   method =   "REML")
   summary(model)
+  summary(censor_model)
   
   # par(mfrow = c(2,2))
   # plot(model)
   
+  # Assigning estimates in a dataframe
+  estimates[i,] <- fixef(model)
+  censor_estimates[i,] <- fixef(censor_model)
+  # print(estimates)
+  
   # Assessing confidence in parameters
   CIs <- intervals(model, which = "fixed")  # calculates 95% CIs
-  CIs <- CIs $fixed[, c("lower", "upper")]
+  CIs <- CIs$fixed[, c("lower", "upper")]
+  
+  censor_CIs <- intervals(censor_model, which = "fixed")  # calculates 95% CIs
+  censor_CIs <- censor_CIs$fixed[, c("lower", "upper")]
   
   
   percents_strain_A = calc_percent_parms_in_CI(percents_strain_A, intercept_strain_A, slope_strain_A, CIs[c(1,3),])
   percents_strain_B = calc_percent_parms_in_CI(percents_strain_B, intercept_strain_B, slope_strain_B, CIs[c(2,4),])
-# }
+  
+  # censor_percents_strain_A = calc_percent_parms_in_CI(percents_strain_A, intercept_strain_A, slope_strain_A,     censor_CIs[c(1,3),])
+  # censor_percents_strain_B = calc_percent_parms_in_CI(percents_strain_B, intercept_strain_B, slope_strain_B, censor_CIs[c(2,4),])
+}
 
 # Percentages of intercept and/or slope values lying within the estimated CIs
 percents_of_parameters_in_CIs <- data.frame(percents_strain_A * 100 / i, percents_strain_B * 100 / i)
 rownames(percents_of_parameters_in_CIs) <- c("intercept", "slope", "both")
 colnames(percents_of_parameters_in_CIs) <- c("strain A", "strain B")
-percents_of_parameters_in_CIs
+print(percents_of_parameters_in_CIs)
+
+censor_percents_of_parameters_in_CIs <- data.frame(censor_percents_strain_A * 100 / i, censor_percents_strain_B * 100 / i)
+rownames(percents_of_parameters_in_CIs) <- c("intercept", "slope", "both")
+colnames(percents_of_parameters_in_CIs) <- c("strain A", "strain B")
+print(censor_percents_of_parameters_in_CIs)
+
+# Bias 
+true_estimates <- c(intercept_strain_A, intercept_strain_B, slope_strain_A, slope_strain_B)
+estimate_means <- colMeans(estimates)
+bias <- abs(estimate_means - true_estimates)
+bias_percentage <-  bias * 100 / true_estimates
+
+censor_estimate_means <- colMeans(censor_estimates)
+censor_bias <- abs(censor_estimate_means - true_estimates)
+censor_bias_percentage <-  censor_bias * 100 / true_estimates
+
+# print(true_estimates)
+# print(bias)
+print(bias_percentage)
+print(censor_bias_percentage)
+
+# xyplot(titer_30 ~ titer_0|strain, input_data)
+xyplot(titer_30 ~ titer_0|IDs, input_data)
+# xyplot(censored_titer_30 ~ censored_titer_0|strain, censored_input_data)
+xyplot(censored_titer_30 ~ censored_titer_0|IDs, censored_input_data)
 ```
+
+```{r}
+# Create a hexbin plot
+hexbinplot(censored_titer_30_strain_A ~ censored_titer_0_strain_A, colramp = function(n) colorRampPalette(c("red", "blue"))(n))
+hexbinplot(censored_titer_30_strain_B ~ censored_titer_0_strain_B, colramp = function(n) colorRampPalette(c("red", "blue"))(n))
+
+```
+
+
+```{r}
+# plotting the data (continuous and censored) of the two strains
+ggplot(data = input_data, aes(x = titer_0, y = titer_30, color = strain)) +
+  geom_point()
+ggplot(data = censored_input_data, aes(x = censored_titer_0, y = censored_titer_30, color = strain)) +
+  geom_point()
+```
+
+
+
+
 
 
 
